@@ -1,0 +1,10 @@
+fastapi>=0.95.0
+uvicorn[standard]>=0.18.0
+SQLAlchemy>=1.4
+asyncpg>=0.27.0
+pydantic>=1.10
+python-jose>=3.3.0
+passlib[bcrypt]>=1.7.0
+streamlit>=1.25.0
+bcrypt>=4.0.1
+httpx>=0.24.0
