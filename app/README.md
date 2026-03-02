@@ -17,7 +17,30 @@ Quick setup: FastAPI + PostgreSQL (async SQLAlchemy)
    - POST `/token` with form data `username` and `password` to receive an access token.
    - Include the token in requests as `Authorization: Bearer <token>` (e.g. to call `/users/`).
 
-5) Streamlit frontend (optional):
+5) Alembic migrations:
+
+   We've included an `alembic/` folder configured for the app. The current
+   base migration is `000_initial.py` which creates the `users` table.
+
+   To run migrations:
+
+   ```bash
+   cd Project/app
+   # set DATABASE_URL if needed
+   alembic upgrade head
+   ```
+
+   To auto-generate a new revision after changing models:
+
+   ```bash
+   alembic revision --autogenerate -m "describe change"
+   alembic upgrade head
+   ```
+
+   Alembic reads `DATABASE_URL` from the environment or you can edit
+   `alembic.ini` directly.
+
+6) Streamlit frontend (optional):
 
    streamlit run frontend.py --server.port 8501
    # The frontend will prompt for username/password and contact the FastAPI server.

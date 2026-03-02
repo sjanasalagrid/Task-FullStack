@@ -5,9 +5,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .db import init_db, get_db
-from .models import User
-from .auth import (
+from app.db import init_db, get_db
+from app.models import User
+from app.auth import (
     get_password_hash,
     authenticate_user,
     create_access_token,
