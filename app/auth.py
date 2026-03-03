@@ -85,3 +85,13 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
 async def get_current_active_user(current_user=Depends(get_current_user)):
     # placeholder for activation checks
     return current_user
+
+
+def verify_token_username(token: str) -> str | None:
+    """Decode access token and return username, or None if invalid/expired."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str | None = payload.get("sub")
+        return username
+    except JWTError:
+        return None
