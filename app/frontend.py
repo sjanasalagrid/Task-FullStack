@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 from passlib.context import CryptContext
+import time
 # pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # print(pwd_ctx.hash("st1ng"))   # copy the output
 
@@ -60,6 +61,7 @@ if st.session_state.show_register:
             if response.status_code == 200:
                 st.success("Registration successful! An OTP has been sent to your email.")
                 st.session_state.show_verify = True
+                st.rerun()
             else:
                 try:
                     error_detail = response.json().get('detail', response.text)
@@ -75,19 +77,22 @@ if st.session_state.show_register:
             if not otp:
                 st.warning("Please enter the code you received.")
             else:
+                email = st.session_state.get("reg_email")
+                if not email:
+                    st.error("Missing email for verification. Please register again.")
+                    st.session_state.show_verify = False
+                    st.rerun()
                 verify_resp = requests.post(
                     f"{API_URL}/verify",
-                    data={"otp": otp},
+                    data={"otp": otp, "email": email},
                     allow_redirects=False,
                 )
                 if verify_resp.status_code in (302, 303):
                     st.session_state.show_register = False
                     st.session_state.show_verify = False
-                    st.markdown(
-                        '<meta http-equiv="refresh" content="0; url=http://localhost:8501">',
-                        unsafe_allow_html=True,
-                    )
-                    st.success("Verified! Redirecting to login...")
+                    st.success("OTP is valid. You can login successfully.")
+                    time.sleep(1)
+                    st.switch_page("frontend.py")
                 elif verify_resp.status_code == 200:
                     st.info("Verification response:")
                     st.write(verify_resp.text)
@@ -100,6 +105,9 @@ else:
     username = st.text_input("Username", key="login_username")
     password = st.text_input("Password", type="password", key="login_password")
 
+    if st.button("Forgot Password?", key="forgot_btn"):
+        st.switch_page("pages/Reset.py")
+
     if st.button("Login", key="login_btn"):
         if username and password:
             payload = {"username": username, "password": password}
@@ -108,15 +116,14 @@ else:
             if response.status_code == 200:
                 data = response.json()
                 token = data.get("access_token")
-                st.success("Logged in!")
-                st.write("JWT:", token)
-                # example subsequent call
-                headers = {"Authorization": f"Bearer {token}"}
-                users_resp = requests.get(f"{API_URL}/users/", headers=headers)
-                if users_resp.status_code == 200:
-                    st.write("Users:", users_resp.json())
+                if not token:
+                    st.error("Login failed: missing token in response.")
                 else:
-                    st.error(f"Failed fetching users: {users_resp.status_code}")
+                    st.markdown(
+                        f'<meta http-equiv="refresh" content="0; url={API_URL}/hello?token={token}">',
+                        unsafe_allow_html=True,
+                    )
+                    st.success("Logged in! Redirecting...")
             else:
                 st.error("Login failed: " + response.text)
         else:

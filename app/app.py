@@ -1,14 +1,38 @@
 
-from fastapi import FastAPI, Depends, HTTPException, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
 from datetime import datetime, timedelta
 from uuid import uuid4
+
+from fastapi import FastAPI, Depends, HTTPException, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+
+def _load_env():
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        os.environ.setdefault(key, value)
+
+
+_load_env()
+
 from app.db import init_db, get_db
-from app.models import User, Verification
+from app.models import User, Verification, PasswordReset
 from app.auth import (
     get_password_hash,
     authenticate_user,
@@ -16,8 +40,13 @@ from app.auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     get_current_active_user,
 )
-from app.email_utils import send_verification_email
-from fastapi.security import OAuth2PasswordRequestForm
+from app.email_utils import (
+    send_verification_email,
+    send_reset_link_email,
+    send_reset_otp_email,
+)
+
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8501")
 
 app = FastAPI()
 
@@ -27,6 +56,16 @@ class UserCreate(BaseModel):
     email: str
     password: str
     created_at: datetime = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    reset_token: str
+    otp: str
+    new_password: str
 
 @app.on_event("startup")
 async def on_startup():
@@ -126,38 +165,131 @@ async def register(user: UserCreate, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         print("send_verification_email failed:", e)
 
-    # redirect user to verification page after registration
-    return RedirectResponse(url="/verify", status_code=303)
+    return {"msg": "otp_sent"}
 
 
-@app.get("/verify", response_class=HTMLResponse)
-async def verify_form():
-    # show simple HTML form for entering OTP
-    return """
-    <html>
-        <head><meta charset="utf-8"><title>Enter OTP</title></head>
-        <body style="font-family: Arial; text-align: center; padding: 50px;">
-            <h1>Enter Verification Code</h1>
-            <form method="post" action="/verify">
-                <input type="text" name="otp" placeholder="6-digit code" maxlength="6" required>
-                <br><br>
-                <button type="submit">Verify</button>
-            </form>
-        </body>
-    </html>
-    """
+@app.post("/forgot-password")
+async def forgot_password(payload: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    # Always return a generic message to avoid account enumeration
+    result = await db.execute(select(User).filter_by(email=payload.email))
+    user = result.scalars().first()
+    if not user:
+        return {"msg": "if_exists_reset_sent"}
+
+    reset_token = uuid4().hex
+    expires_at = datetime.utcnow() + timedelta(minutes=30)
+    reset = PasswordReset(
+        email=payload.email,
+        reset_token=reset_token,
+        created_at=datetime.utcnow(),
+        expires_at=expires_at,
+    )
+    db.add(reset)
+    await db.commit()
+
+    try:
+        send_reset_link_email(payload.email, reset_token)
+    except Exception as e:
+        print("send_reset_link_email failed:", e)
+
+    return {"msg": "if_exists_reset_sent"}
+
+
+@app.post("/reset/start")
+async def reset_start(reset_token: str = Form(None), db: AsyncSession = Depends(get_db)):
+    if not reset_token:
+        raise HTTPException(status_code=400, detail="Missing reset token")
+
+    result = await db.execute(select(PasswordReset).filter_by(reset_token=reset_token))
+    reset = result.scalars().first()
+    if not reset or reset.used_at is not None:
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+    if reset.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Reset token expired")
+
+    now = datetime.utcnow()
+    if not reset.otp_sent_at or (now - reset.otp_sent_at).total_seconds() >= 180:
+        import random
+
+        reset.otp = f"{random.randint(0, 999999):06d}"
+        reset.otp_sent_at = now
+        reset.otp_expires_at = now + timedelta(minutes=10)
+        await db.commit()
+
+        try:
+            send_reset_otp_email(reset.email, reset.otp)
+        except Exception as e:
+            print("send_reset_otp_email failed:", e)
+
+    return {
+        "msg": "otp_sent",
+        "otp_sent_at": reset.otp_sent_at.isoformat() if reset.otp_sent_at else None,
+    }
+
+
+@app.post("/reset/verify")
+async def reset_verify(payload: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(PasswordReset).filter_by(reset_token=payload.reset_token))
+    reset = result.scalars().first()
+    if not reset or reset.used_at is not None:
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+    if reset.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Reset token expired")
+
+    if not reset.otp or not reset.otp_expires_at or reset.otp_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="OTP expired. Please resend.")
+    if reset.otp != payload.otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+
+    if len(payload.new_password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="Password too long (max 72 bytes)")
+
+    result = await db.execute(select(User).filter_by(email=reset.email))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=400, detail="User not found")
+
+    user.password_hash = get_password_hash(payload.new_password)
+    reset.used_at = datetime.utcnow()
+    await db.commit()
+    return {"msg": "password_reset_success"}
 
 
 @app.post("/verify", response_class=HTMLResponse)
-async def verify_submit(otp: str = Form(None), db: AsyncSession = Depends(get_db)):
-    if not otp:
-        return "<html><body><h1>No code provided.</h1></body></html>"
-    result = await db.execute(select(Verification).filter_by(otp=otp))
+async def verify_submit(
+    otp: str = Form(None),
+    email: str = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    if not otp or not email:
+        return "<html><body><h1>OTP and email are required.</h1></body></html>"
+
+    result = await db.execute(
+        select(Verification).filter_by(email=email).order_by(Verification.created_at.desc())
+    )
     v = result.scalars().first()
     if not v:
-        return "<html><body><h1>Invalid code.</h1></body></html>"
-    if v.expires_at < datetime.utcnow():
-        return "<html><body><h1>Code expired. Please register again.</h1></body></html>"
+        return "<html><body><h1>No pending verification found for this email.</h1></body></html>"
+
+    # If OTP is invalid or expired, generate and send a new OTP
+    if v.otp != otp or v.expires_at < datetime.utcnow():
+        import random
+
+        new_otp = f"{random.randint(0, 999999):06d}"
+        v.otp = new_otp
+        v.created_at = datetime.utcnow()
+        v.expires_at = datetime.utcnow() + timedelta(minutes=10)
+        await db.commit()
+
+        try:
+            send_verification_email(email, new_otp)
+        except Exception as e:
+            print("send_verification_email failed:", e)
+
+        return (
+            "<html><body><h1>Invalid or expired code. "
+            "A new OTP has been sent to your email.</h1></body></html>"
+        )
 
     # ensure username/email still unique
     result = await db.execute(select(User).filter_by(username=v.username))
@@ -178,7 +310,7 @@ async def verify_submit(otp: str = Form(None), db: AsyncSession = Depends(get_db
     await db.refresh(new_user)
 
     # redirect to login page after successful verification
-    return RedirectResponse(url="http://localhost:8501", status_code=303)
+    return RedirectResponse(url=FRONTEND_URL, status_code=303)
 
 
 @app.get("/hello", response_class=HTMLResponse)
@@ -192,8 +324,76 @@ async def hello(token: str):
     return f"""
     <html>
         <body style="font-family: Arial; text-align: center; padding: 50px;">
-            <h1>Hello, {username}!</h1>
-            <p>You are logged in via verification link.</p>
+            <h1>Welcome, {username}!</h1>
+            <p>Status: Logged in</p>
         </body>
     </html>
     """
+
+
+def _run_dev_stack():
+    # Run FastAPI (uvicorn) and Streamlit in parallel for local dev
+    python_exe = sys.executable
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    uvicorn_cmd = [
+        python_exe,
+        "-m",
+        "uvicorn",
+        "app.app:app",
+        "--reload",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+    ]
+    streamlit_cmd = [
+        python_exe,
+        "-m",
+        "streamlit",
+        "run",
+        "app/frontend.py",
+        "--server.address",
+        "0.0.0.0",
+        "--server.port",
+        "8501",
+    ]
+
+    uvicorn_proc = subprocess.Popen(uvicorn_cmd, env=env)
+    streamlit_proc = subprocess.Popen(streamlit_cmd, env=env)
+
+    def _shutdown(*_args):
+        for proc in (uvicorn_proc, streamlit_proc):
+            if proc.poll() is None:
+                proc.terminate()
+
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
+    # Wait until one exits, then shut down the other
+    exit_code = None
+    try:
+        exit_code = uvicorn_proc.wait()
+    finally:
+        _shutdown()
+        if exit_code is None:
+            exit_code = streamlit_proc.wait()
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    _run_dev_stack()
+
+'''
+# PostgreSQL command to truncate all tables and reset identity (auto-increment) counters
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+    EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE';
+  END LOOP;
+END $$;
+
+'''
