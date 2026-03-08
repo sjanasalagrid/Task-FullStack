@@ -27,3 +27,17 @@ class Verification(Base):
     password_hash = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)
+
+
+class PasswordReset(Base):
+    __tablename__ = "password_resets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, index=True, nullable=False)
+    reset_token = Column(String, unique=True, index=True, nullable=False)
+    otp = Column(String(6), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    otp_expires_at = Column(DateTime, nullable=True)
+    otp_sent_at = Column(DateTime, nullable=True)
+    used_at = Column(DateTime, nullable=True)
