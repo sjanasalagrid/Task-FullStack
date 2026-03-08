@@ -24,6 +24,8 @@ if "show_register" not in st.session_state:
     st.session_state.show_register = False
 if "show_verify" not in st.session_state:
     st.session_state.show_verify = False
+if "auth_token" not in st.session_state:
+    st.session_state.auth_token = None
 
 # Toggle between login and registration
 col1, col2 = st.columns(2)
@@ -108,7 +110,7 @@ else:
     if st.button("Forgot Password?", key="forgot_btn"):
         st.switch_page("pages/Reset.py")
 
-    if st.button("Login", key="login_btn"):
+if st.button("Login", key="login_btn"):
         if username and password:
             payload = {"username": username, "password": password}
             # use OAuth2 password flow
@@ -119,11 +121,8 @@ else:
                 if not token:
                     st.error("Login failed: missing token in response.")
                 else:
-                    st.markdown(
-                        f'<meta http-equiv="refresh" content="0; url={API_URL}/hello?token={token}">',
-                        unsafe_allow_html=True,
-                    )
-                    st.success("Logged in! Redirecting...")
+                    st.session_state.auth_token = token
+                    st.switch_page("pages/Home.py")
             else:
                 st.error("Login failed: " + response.text)
         else:

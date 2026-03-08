@@ -75,3 +75,46 @@ def send_reset_otp_email(to_email: str, otp: str):
         server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.send_message(msg)
+
+
+def send_task_reminder_email(to_email: str, title: str, priority: str, when_label: str, due_date: str | None):
+    subject = "Task reminder"
+    if due_date:
+        body = f"Reminder ({when_label}): '{title}' [{priority}] is due on {due_date}."
+    else:
+        body = f"Reminder ({when_label}): '{title}' [{priority}] is due soon."
+
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
+        print(f"[EMAIL] To: {to_email}\nSubject: {subject}\n{body}")
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = FROM_ADDR
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT or 587) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+
+
+def send_task_event_email(to_email: str, title: str, priority: str, event: str):
+    subject = f"Task {event}"
+    body = f"Task '{title}' [{priority}] was {event}."
+
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
+        print(f"[EMAIL] To: {to_email}\nSubject: {subject}\n{body}")
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = FROM_ADDR
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT or 587) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
