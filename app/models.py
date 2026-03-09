@@ -12,6 +12,9 @@ class User(Base):
     username = Column(String, unique=True, index=True, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String, nullable=False)
+    full_name = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    photo_data = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     # new nullable bio column for testing migrations
     bio = Column(Text, nullable=True)
@@ -121,3 +124,18 @@ class TaskVersion(Base):
     recurrence = Column(String, nullable=True)
     reminder_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class UserUpdateRequest(Base):
+    __tablename__ = "user_update_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    otp = Column(String(6), nullable=False)
+    new_email = Column(String, nullable=True)
+    new_password_hash = Column(String, nullable=True)
+    new_full_name = Column(String, nullable=True)
+    new_phone = Column(String, nullable=True)
+    new_photo_data = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)

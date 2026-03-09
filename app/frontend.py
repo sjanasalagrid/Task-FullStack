@@ -110,7 +110,7 @@ else:
     if st.button("Forgot Password?", key="forgot_btn"):
         st.switch_page("pages/Reset.py")
 
-if st.button("Login", key="login_btn"):
+    if st.button("Login", key="login_btn"):
         if username and password:
             payload = {"username": username, "password": password}
             # use OAuth2 password flow

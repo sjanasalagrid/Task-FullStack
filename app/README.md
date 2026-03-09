@@ -1,55 +1,145 @@
-Quick setup: FastAPI + PostgreSQL (async SQLAlchemy)
+Quick setup: FastAPI + Streamlit + PostgreSQL (async SQLAlchemy)
 
-1) Set `DATABASE_URL` environment variable, e.g.:
+**Setup**
+1) Create `.env` in `Project/.env`:
 
-   export DATABASE_URL="postgresql+asyncpg://postgres:password@localhost:5432/mydb"
+```
+DATABASE_URL=postgresql+asyncpg://USER:PASSWORD@localhost:5432/DBNAME
+SECRET_KEY=REPLACE_WITH_SECURE_SECRET
+FROM_EMAIL=you@example.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@example.com
+SMTP_PASSWORD=REPLACE_WITH_APP_PASSWORD
+STREAMLIT_SECRETS=[api]\nurl = "http://localhost:8000"
+FRONTEND_URL=http://localhost:8501
+ENABLE_REMINDER_SCHEDULER=1
+APP_TZ=Asia/Kolkata
+```
 
 2) Install dependencies:
 
-   pip install -r requirements.txt
+```bash
+pip install -r requirements.txt
+```
 
-3) Run the app:
+3) Run the app (FastAPI + Streamlit together):
 
-   uvicorn app.app:app --reload --host 0.0.0.0 --port 8000
+```bash
+cd Project
+python -m app.app
+```
 
-4) JWT authentication:
+**JWT authentication**
+- POST `/token` with form data `username` and `password`.
+- Include token in requests: `Authorization: Bearer <token>`.
 
-   - POST `/token` with form data `username` and `password` to receive an access token.
-   - Include the token in requests as `Authorization: Bearer <token>` (e.g. to call `/users/`).
+**Migrations (Alembic)**
+```bash
+cd Project/app
+alembic upgrade head
+```
 
-5) Alembic migrations:
+To generate a new migration after model changes:
+```bash
+alembic revision --autogenerate -m "describe change"
+alembic upgrade head
+```
 
-   We've included an `alembic/` folder configured for the app. The current
-   base migration is `000_initial.py` which creates the `users` table.
+**Streamlit frontend (standalone)**
+```bash
+cd Project/app
+streamlit run frontend.py --server.port 8501
+```
 
-   To run migrations:
+---
 
-   ```bash
-   cd Project/app
-   # set DATABASE_URL if needed
-   alembic upgrade head
-   ```
+## SMTP App Password (Gmail)
+1) Enable 2‑Step Verification on your Google account.
+2) Create an App Password (Google Account → Security → App passwords).
+3) Use that app password as `SMTP_PASSWORD`.
 
-   To auto-generate a new revision after changing models:
+---
 
-   ```bash
-   alembic revision --autogenerate -m "describe change"
-   alembic upgrade head
-   ```
+## Database Schema (High Level)
 
-   Alembic reads `DATABASE_URL` from the environment or you can edit
-   `alembic.ini` directly.
+**users**
+- id (PK)
+- username (unique)
+- email (unique)
+- password_hash
+- full_name, phone, photo_data
+- created_at
 
-6) Streamlit frontend (optional):
+**tasks**
+- id (PK)
+- user_id (FK → users.id)
+- title, description
+- priority, status
+- due_date, reminder_at
+- tags, tag_colors
+- recurrence
+- reminder_sent_day_before, reminder_sent_30min
+- created_at, updated_at, completed_at
+- is_deleted
 
-   streamlit run frontend.py --server.port 8501
-   # The frontend will prompt for username/password and contact the FastAPI server.
-   # You can override the API endpoint by setting STREAMLIT_SECRETS in 
-   # `~/.streamlit/secrets.toml`:
-   #
-   # [api]
-   # url = "http://localhost:8000"
+**subtasks**
+- id (PK)
+- task_id (FK → tasks.id)
+- title, is_done
 
-Notes:
-- `init_db()` runs on startup and will create tables defined in `models.py`.
-- Replace the default `DATABASE_URL` with your credentials.
+**task_activity**
+- id (PK)
+- task_id (FK → tasks.id)
+- user_id (FK → users.id)
+- action, created_at
+
+**task_versions**
+- id (PK)
+- task_id (FK → tasks.id)
+- user_id (FK → users.id)
+- version, action
+- snapshot fields (title, description, status, etc.)
+- created_at
+
+**task_drafts**
+- id (PK)
+- task_id (FK → tasks.id)
+- user_id (FK → users.id)
+- draft fields (title, description, etc.)
+- updated_at
+
+**verifications**
+- id (PK)
+- otp, username, email, password_hash
+- created_at, expires_at
+
+**password_resets**
+- id (PK)
+- email, reset_token
+- otp, otp_sent_at, otp_expires_at
+- created_at, expires_at, used_at
+
+**user_update_requests**
+- id (PK)
+- user_id (FK → users.id)
+- otp
+- new_email, new_password_hash
+- new_full_name, new_phone, new_photo_data
+- created_at, expires_at
+
+---
+
+## System Design (High Level)
+
+```
+User
+  └─> Streamlit UI (frontend.py / pages)
+         └─> FastAPI (app.py)
+               ├─> PostgreSQL (async SQLAlchemy)
+               └─> SMTP Email (OTP + reminders)
+```
+
+**Notes**
+- `.env` is ignored by git (secrets must not be committed).
+- Scheduler sends reminder emails based on `reminder_at`.

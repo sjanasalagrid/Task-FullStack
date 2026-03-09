@@ -34,7 +34,17 @@ def _load_env():
 _load_env()
 
 from app.db import init_db, get_db
-from app.models import User, Verification, PasswordReset, Task, Subtask, TaskActivity, TaskDraft, TaskVersion
+from app.models import (
+    User,
+    Verification,
+    PasswordReset,
+    Task,
+    Subtask,
+    TaskActivity,
+    TaskDraft,
+    TaskVersion,
+    UserUpdateRequest,
+)
 from app.auth import (
     get_password_hash,
     authenticate_user,
@@ -117,6 +127,18 @@ class TaskDraftPayload(BaseModel):
     tag_colors: dict[str, str] | None = None
     recurrence: str | None = None
     reminder_at: datetime | None = None
+
+
+class ProfileUpdateRequest(BaseModel):
+    full_name: str | None = None
+    phone: str | None = None
+    photo_data: str | None = None
+    new_email: str | None = None
+    new_password: str | None = None
+
+
+class ProfileVerifyRequest(BaseModel):
+    otp: str
 
 @app.on_event("startup")
 async def on_startup():
@@ -261,8 +283,122 @@ async def me(current_user=Depends(get_current_active_user)):
         "id": current_user.id,
         "username": current_user.username,
         "email": current_user.email,
+        "full_name": current_user.full_name,
+        "phone": current_user.phone,
+        "photo_data": current_user.photo_data,
         "created_at": current_user.created_at,
     }
+
+
+@app.post("/profile/request-change")
+async def profile_request_change(
+    payload: ProfileUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_active_user),
+):
+    # Validate new email if provided
+    if payload.new_email:
+        result = await db.execute(select(User).filter_by(email=payload.new_email))
+        if result.scalars().first():
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+    if payload.new_password and len(payload.new_password.encode("utf-8")) > 72:
+        raise HTTPException(status_code=400, detail="Password too long (max 72 bytes)")
+
+    import random
+    otp = f"{random.randint(0, 999999):06d}"
+    expires = datetime.utcnow() + timedelta(minutes=10)
+
+    req = UserUpdateRequest(
+        user_id=current_user.id,
+        otp=otp,
+        new_email=payload.new_email,
+        new_password_hash=get_password_hash(payload.new_password) if payload.new_password else None,
+        new_full_name=payload.full_name,
+        new_phone=payload.phone,
+        new_photo_data=payload.photo_data,
+        created_at=datetime.utcnow(),
+        expires_at=expires,
+    )
+    db.add(req)
+    await db.commit()
+
+    try:
+        send_verification_email(current_user.email, otp)
+    except Exception as e:
+        print("send_verification_email failed:", e)
+
+    return {"msg": "otp_sent"}
+
+
+@app.post("/profile/verify-change")
+async def profile_verify_change(
+    payload: ProfileVerifyRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_active_user),
+):
+    result = await db.execute(
+        select(UserUpdateRequest)
+        .filter_by(user_id=current_user.id)
+        .order_by(UserUpdateRequest.created_at.desc())
+    )
+    req = result.scalars().first()
+    if not req:
+        raise HTTPException(status_code=400, detail="No pending change")
+    if req.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="OTP expired")
+    if req.otp != payload.otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+
+    if req.new_email:
+        current_user.email = req.new_email
+    if req.new_password_hash:
+        current_user.password_hash = req.new_password_hash
+    if req.new_full_name is not None:
+        current_user.full_name = req.new_full_name
+    if req.new_phone is not None:
+        current_user.phone = req.new_phone
+    if req.new_photo_data is not None:
+        current_user.photo_data = req.new_photo_data
+
+    await db.delete(req)
+    await db.commit()
+    try:
+        send_task_event_email(current_user.email, "Profile", "Info", "updated")
+    except Exception as e:
+        print("send_task_event_email failed:", e)
+    return {"msg": "profile_updated"}
+
+
+@app.get("/activity/recent")
+async def activity_recent(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_active_user),
+):
+    result = await db.execute(
+        select(TaskActivity)
+        .filter_by(user_id=current_user.id)
+        .order_by(TaskActivity.created_at.desc())
+        .limit(20)
+    )
+    acts = result.scalars().all()
+    return [{"action": a.action, "created_at": a.created_at} for a in acts]
+
+
+@app.get("/activity/heatmap")
+async def activity_heatmap(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_active_user),
+):
+    result = await db.execute(
+        select(TaskActivity).filter_by(user_id=current_user.id).order_by(TaskActivity.created_at.desc())
+    )
+    acts = result.scalars().all()
+    counts: dict[str, int] = {}
+    for a in acts:
+        day = a.created_at.date().isoformat()
+        counts[day] = counts.get(day, 0) + 1
+    return counts
 
 
 @app.get("/tasks")

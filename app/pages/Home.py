@@ -2,6 +2,8 @@ import requests
 import streamlit as st
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
+import base64
+import matplotlib.pyplot as plt
 
 # attempt to read api_url from secrets, fall back to localhost
 try:
@@ -33,6 +35,28 @@ def _normalize_color(value: str) -> str:
     return "#9e9e9e"
 
 st.set_page_config(page_title="Home", layout="wide")
+st.markdown(
+    """
+<style>
+.block-container {animation: fadein 0.5s;}
+@keyframes fadein {from {opacity: 0; transform: translateY(6px);} to {opacity: 1; transform: translateY(0);}}
+
+div.stButton>button {
+  border-radius: 12px;
+  padding: 8px 14px;
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+div.stButton>button:hover {transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.08);}
+
+.stMetric {
+  background: #f8f9fb;
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 token = st.session_state.get("auth_token")
 if not token:
@@ -57,9 +81,35 @@ with header_left:
     st.caption("Status: Logged in")
 with header_right:
     st.write("")
-    if st.button("Logout"):
-        st.session_state.auth_token = None
-        st.switch_page("frontend.py")
+    avatar = me.get("photo_data")
+    if avatar:
+        st.markdown(
+            f"""
+<style>
+[data-testid="stPopover"] button {{
+  background-image: url('{avatar}');
+  background-size: cover;
+  background-position: center;
+  color: transparent;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+}}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
+        trigger = " "
+    else:
+        trigger = "☰"
+    with st.popover(trigger):
+        if st.button("Home"):
+            st.switch_page("pages/Home.py")
+        if st.button("Profile"):
+            st.switch_page("pages/Profile.py")
+        if st.button("Logout"):
+            st.session_state.auth_token = None
+            st.switch_page("frontend.py")
 
 col_a, col_b, col_c, col_d = st.columns(4)
 tasks_resp = requests.get(f"{API_URL}/tasks", headers=headers, params={"status": "all"})
@@ -88,6 +138,19 @@ col_a.metric("Total", total)
 col_b.metric("Active", active)
 col_c.metric("Completed", completed)
 col_d.metric("Overdue", overdue)
+
+pie_col, _ = st.columns([1, 3])
+with pie_col:
+    fig, ax = plt.subplots(figsize=(2.5, 2.5))
+    ax.pie(
+        [active, completed, overdue],
+        labels=["Active", "Completed", "Overdue"],
+        autopct="%1.0f%%",
+        startangle=90,
+        textprops={"fontsize": 8},
+    )
+    ax.axis("equal")
+    st.pyplot(fig, use_container_width=False)
 
 st.divider()
 
