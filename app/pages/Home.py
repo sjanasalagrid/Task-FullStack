@@ -51,7 +51,8 @@ div.stButton>button:hover {transform: translateY(-1px); box-shadow: 0 4px 12px r
 .stMetric {
   background: #f8f9fb;
   border-radius: 12px;
-  padding: 8px 12px;
+  padding: 18px 20px;
+  min-height: 140px;
 }
 </style>
 """,
@@ -134,23 +135,35 @@ def _is_overdue(t):
         return False
 
 overdue = len([t for t in tasks if _is_overdue(t)])
-col_a.metric("Total", total)
-col_b.metric("Active", active)
-col_c.metric("Completed", completed)
-col_d.metric("Overdue", overdue)
 
-pie_col, _ = st.columns([1, 3])
+pie_col, metrics_col = st.columns([1, 2])
 with pie_col:
     fig, ax = plt.subplots(figsize=(2.5, 2.5))
     ax.pie(
         [active, completed, overdue],
-        labels=["Active", "Completed", "Overdue"],
+        labels=None,
         autopct="%1.0f%%",
         startangle=90,
         textprops={"fontsize": 8},
     )
+    ax.legend(
+        ["Active", "Completed", "Overdue"],
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.15),
+        ncol=3,
+        fontsize=8,
+        frameon=False,
+    )
     ax.axis("equal")
     st.pyplot(fig, use_container_width=False)
+
+with metrics_col:
+    row1 = st.columns(2)
+    row2 = st.columns(2)
+    row1[0].metric("Total", total)
+    row1[1].metric("Active", active)
+    row2[0].metric("Completed", completed)
+    row2[1].metric("Overdue", overdue)
 
 st.divider()
 
